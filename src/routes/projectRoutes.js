@@ -1,42 +1,200 @@
 const express = require('express');
 const Project = require('../models/Project');
+const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
+
 const router = express.Router();
 
-// 1. Create a Project (Only Managers and Admins can create)
-router.post('/', protect, restrictTo('project_manager', 'admin'), async (req, res, next) => {
+// POST /api/projects — create project
+// Admin must pass managerId in body to assign a PM
+// PM auto-assigned as manager
+router.post('/', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
   try {
-    const { title, description, deadline } = req.body;
-    
-    const project = await Project.create({
-      title,
-      description,
-      deadline,
-      manager: req.user._id, // Automatically assign the logged-in user as the manager
-    });
+    const { title, description, deadline, managerId } = req.body;
+    let manager = req.user._id;
 
+    if (req.user.role === 'admin') {
+      if (!managerId) {
+        return res.status(400).json({ message: 'Admin must assign a Project Manager' });
+      }
+      const pm = await User.findById(managerId);
+      if (!pm) return res.status(404).json({ message: 'Project Manager not found' });
+      if (pm.role !== 'project_manager') {
+        return res.status(400).json({ message: 'Assigned user must have project_manager role' });
+      }
+      manager = managerId;
+    }
+
+    const project = await Project.create({ title, description, deadline, manager });
+    await project.populate('manager', 'name email role');
     res.status(201).json({ success: true, data: project });
   } catch (error) {
     next(error);
   }
 });
 
-// 2. Get All Projects (Admins see everything, Managers/Members see only what they belong to)
+// GET /api/projects — list projects (role filtered)
 router.get('/', protect, async (req, res, next) => {
   try {
     let projects;
-    
     if (req.user.role === 'admin') {
-      projects = await Project.find().populate('manager', 'name email');
+      projects = await Project.find()
+        .populate('manager', 'name email')
+        .populate('teamMembers', 'name email role')
+        .sort({ createdAt: -1 });
     } else {
-      // Find projects where user is either the manager OR a team member
       projects = await Project.find({
         $or: [{ manager: req.user._id }, { teamMembers: req.user._id }],
-      }).populate('manager', 'name email');
+      })
+        .populate('manager', 'name email')
+        .populate('teamMembers', 'name email role')
+        .sort({ createdAt: -1 });
+    }
+    res.json({ success: true, count: projects.length, data: projects });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/projects/:id — single project
+router.get('/:id', protect, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id)
+      .populate('manager', 'name email role')
+      .populate('teamMembers', 'name email role');
+
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    const isMember = project.teamMembers.some(
+      (m) => m._id.toString() === req.user._id.toString()
+    );
+    const isManager = project.manager._id.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin';
+
+    if (!isAdmin && !isManager && !isMember) {
+      return res.status(403).json({ message: 'Not authorized to view this project' });
     }
 
-    res.json({ success: true, count: projects.length, data: projects });
+    res.json({ success: true, data: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PUT /api/projects/:id — update project (admin or assigned PM)
+router.put('/:id', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    if (
+      req.user.role === 'project_manager' &&
+      project.manager.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: 'Not authorized to update this project' });
+    }
+
+    const { title, description, deadline, status } = req.body;
+    if (title) project.title = title;
+    if (description) project.description = description;
+    if (deadline) project.deadline = deadline;
+    if (status) project.status = status;
+
+    await project.save();
+    await project.populate('manager', 'name email');
+    res.json({ success: true, data: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /api/projects/:id — admin only
+router.delete('/:id', protect, restrictTo('admin'), async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    await project.deleteOne();
+    res.json({ success: true, message: 'Project deleted' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/projects/:id/members — add members (admin or assigned PM)
+// body: { memberIds: ['id1', 'id2'] }
+router.post('/:id/members', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    if (
+      req.user.role === 'project_manager' &&
+      project.manager.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: 'Not authorized to manage this project' });
+    }
+
+    const { memberIds } = req.body;
+    if (!memberIds || !Array.isArray(memberIds)) {
+      return res.status(400).json({ message: 'memberIds must be an array of user IDs' });
+    }
+
+    memberIds.forEach((id) => {
+      if (!project.teamMembers.includes(id)) {
+        project.teamMembers.push(id);
+      }
+    });
+
+    await project.save();
+    await project.populate('teamMembers', 'name email role');
+    res.json({ success: true, message: 'Members added', data: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /api/projects/:id/members/:memberId — remove a member
+router.delete('/:id/members/:memberId', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    if (
+      req.user.role === 'project_manager' &&
+      project.manager.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: 'Not authorized to manage this project' });
+    }
+
+    project.teamMembers = project.teamMembers.filter(
+      (m) => m.toString() !== req.params.memberId
+    );
+
+    await project.save();
+    res.json({ success: true, message: 'Member removed', data: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PUT /api/projects/:id/assign-manager — reassign PM (admin only)
+// body: { managerId: 'userId' }
+router.put('/:id/assign-manager', protect, restrictTo('admin'), async (req, res, next) => {
+  try {
+    const { managerId } = req.body;
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    const pm = await User.findById(managerId);
+    if (!pm || pm.role !== 'project_manager') {
+      return res.status(400).json({ message: 'Assigned user must have project_manager role' });
+    }
+
+    project.manager = managerId;
+    await project.save();
+    await project.populate('manager', 'name email role');
+    res.json({ success: true, message: 'Project manager updated', data: project });
   } catch (error) {
     next(error);
   }
