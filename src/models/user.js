@@ -1,38 +1,43 @@
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
+const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 
 const userSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: [true, 'Name is required'],
+      required: [true, "Name is required"],
       trim: true,
     },
     email: {
       type: String,
-      required: [true, 'Email is required'],
+      required: [true, "Email is required"],
       unique: true,
       lowercase: true,
       trim: true,
     },
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: [true, "Password is required"],
       minlength: 6,
       select: false, // never return password by default in queries
     },
     role: {
       type: String,
-      enum: ['admin', 'project_manager', 'member'],
-      default: 'member',
+      enum: ["admin", "project_manager", "member"],
+      default: "member",
+    },
+    availability: {
+      type: String,
+      enum: ["available", "not_available"],
+      default: "available",
     },
   },
-  { timestamps: true } // adds createdAt, updatedAt automatically
+  { timestamps: true }, // adds createdAt, updatedAt automatically
 );
 
 // Hash password before saving, only if it was modified
-userSchema.pre('save', async function () {
-  if (!this.isModified('password')) {
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) {
     return;
   }
 
@@ -45,4 +50,4 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
   return bcrypt.compare(enteredPassword, this.password);
 };
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.model("User", userSchema);

@@ -6,8 +6,16 @@ const { validateRegister, validateLogin } = require('../middleware/validate');
 
 const router = express.Router();
 
-// @route   POST /api/auth/register
-// @desc    Register a new user — always created as 'member', regardless of body input
+// Helper to format user response consistently
+const formatUser = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  availability: user.availability,
+});
+
+// POST /api/auth/register
 router.post('/register', validateRegister, async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
@@ -17,16 +25,10 @@ router.post('/register', validateRegister, async (req, res, next) => {
       return res.status(400).json({ message: 'Email already registered' });
     }
 
-    // role is intentionally NOT taken from req.body — prevents self-promotion at signup
     const user = await User.create({ name, email, password, role: 'member' });
 
     res.status(201).json({
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: formatUser(user),
       token: generateToken(user._id, user.role),
     });
   } catch (error) {
@@ -34,25 +36,18 @@ router.post('/register', validateRegister, async (req, res, next) => {
   }
 });
 
-// @route   POST /api/auth/login
+// POST /api/auth/login
 router.post('/login', validateLogin, async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    // password has `select: false` in schema, so explicitly request it here
     const user = await User.findOne({ email }).select('+password');
-
     if (!user || !(await user.matchPassword(password))) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
     res.json({
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: formatUser(user),
       token: generateToken(user._id, user.role),
     });
   } catch (error) {
@@ -60,17 +55,9 @@ router.post('/login', validateLogin, async (req, res, next) => {
   }
 });
 
-// @route   GET /api/auth/me
-// @desc    Get currently logged-in user's data (used on app load / refresh)
+// GET /api/auth/me
 router.get('/me', protect, async (req, res) => {
-  res.json({
-    user: {
-      id: req.user._id,
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-    },
-  });
+  res.json({ user: formatUser(req.user) });
 });
 
 module.exports = router;

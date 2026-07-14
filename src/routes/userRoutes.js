@@ -5,21 +5,28 @@ const { restrictTo } = require('../middleware/role');
 
 const router = express.Router();
 
-// All routes require login + admin role
-router.use(protect, restrictTo('admin'));
-
-// GET /api/users — list all users
-router.get('/', async (req, res, next) => {
+// GET /api/users — admin sees all users, PM sees all non-admin users
+router.get('/', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
   try {
-    const users = await User.find().select('-password').sort({ createdAt: -1 });
+    let users;
+
+    if (req.user.role === 'admin') {
+      users = await User.find().select('-password').sort({ createdAt: -1 });
+    } else {
+      // PM sees everyone except admins
+      users = await User.find({ role: { $ne: 'admin' } })
+        .select('-password')
+        .sort({ createdAt: -1 });
+    }
+
     res.json({ success: true, count: users.length, data: users });
   } catch (error) {
     next(error);
   }
 });
 
-// GET /api/users/:id — get single user
-router.get('/:id', async (req, res, next) => {
+// GET /api/users/:id — admin or PM can look up a single user
+router.get('/:id', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
   try {
     const user = await User.findById(req.params.id).select('-password');
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -29,8 +36,8 @@ router.get('/:id', async (req, res, next) => {
   }
 });
 
-// PUT /api/users/:id/promote — member → project_manager
-router.put('/:id/promote', async (req, res, next) => {
+// PUT /api/users/:id/promote — member → project_manager (admin only)
+router.put('/:id/promote', protect, restrictTo('admin'), async (req, res, next) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -49,8 +56,8 @@ router.put('/:id/promote', async (req, res, next) => {
   }
 });
 
-// PUT /api/users/:id/demote — project_manager → member
-router.put('/:id/demote', async (req, res, next) => {
+// PUT /api/users/:id/demote — project_manager → member (admin only)
+router.put('/:id/demote', protect, restrictTo('admin'), async (req, res, next) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -72,8 +79,41 @@ router.put('/:id/demote', async (req, res, next) => {
   }
 });
 
-// PUT /api/users/:id — edit name/email
-router.put('/:id', async (req, res, next) => {
+// PUT /api/users/:id/availability — toggle availability
+// Admin can change anyone's, user can change their own
+router.put('/:id/availability', protect, async (req, res, next) => {
+  try {
+    const { availability } = req.body;
+
+    if (!['available', 'not_available'].includes(availability)) {
+      return res.status(400).json({ message: 'availability must be "available" or "not_available"' });
+    }
+
+    const isAdmin = req.user.role === 'admin';
+    const isSelf = req.params.id === req.user._id.toString();
+
+    if (!isAdmin && !isSelf) {
+      return res.status(403).json({ message: 'Not authorized to update this user' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    user.availability = availability;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `Availability updated to ${availability}`,
+      data: { id: user._id, name: user.name, availability: user.availability },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PUT /api/users/:id — edit name/email (admin only)
+router.put('/:id', protect, restrictTo('admin'), async (req, res, next) => {
   try {
     const { name, email } = req.body;
     const user = await User.findById(req.params.id);
@@ -100,8 +140,8 @@ router.put('/:id', async (req, res, next) => {
   }
 });
 
-// DELETE /api/users/:id — delete user, cannot delete self
-router.delete('/:id', async (req, res, next) => {
+// DELETE /api/users/:id — admin only, cannot delete self
+router.delete('/:id', protect, restrictTo('admin'), async (req, res, next) => {
   try {
     if (req.params.id === req.user._id.toString()) {
       return res.status(400).json({ message: 'You cannot delete your own account' });
