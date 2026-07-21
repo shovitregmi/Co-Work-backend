@@ -135,4 +135,55 @@ router.delete('/:id', protect, restrictTo('admin', 'project_manager'), async (re
   }
 });
 
+// GET /api/tasks/progress/by-status — count tasks by status in a project
+// Query: ?projectId=xxx
+router.get('/progress/by-status', protect, async (req, res, next) => {
+  try {
+    const projectId = req.query.projectId;
+
+    if (!projectId) {
+      return res.status(400).json({ message: 'projectId query param required' });
+    }
+
+    const project = await Project.findById(projectId);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    // Check authorization
+    const isMember = project.teamMembers.some((m) => m.toString() === req.user._id.toString());
+    const isManager = project.manager.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin';
+
+    if (!isAdmin && !isManager && !isMember) {
+      return res.status(403).json({ message: 'Not authorized to view this project' });
+    }
+
+    const statusCounts = await Task.aggregate([
+      { $match: { projectId: mongoose.Types.ObjectId(projectId) } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const total = statusCounts.reduce((sum, s) => sum + s.count, 0);
+
+    const progress = {
+      total,
+      byStatus: {},
+      percentages: {},
+    };
+
+    statusCounts.forEach((s) => {
+      progress.byStatus[s._id] = s.count;
+      progress.percentages[s._id] = total > 0 ? Math.round((s.count / total) * 100) : 0;
+    });
+
+    res.json({ success: true, data: progress });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;

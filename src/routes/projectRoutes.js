@@ -200,4 +200,59 @@ router.put('/:id/assign-manager', protect, restrictTo('admin'), async (req, res,
   }
 });
 
+// GET /api/projects/stats/member-projects — all members with their project counts (admin only)
+router.get('/stats/member-projects', protect, restrictTo('admin'), async (req, res, next) => {
+  try {
+    const members = await User.find({ role: 'member' }).select('_id name email');
+
+    const memberStats = await Promise.all(
+      members.map(async (member) => {
+        const projectCount = await Project.countDocuments({
+          teamMembers: member._id,
+        });
+        return {
+          memberId: member._id,
+          memberName: member.name,
+          memberEmail: member.email,
+          projectsAssigned: projectCount,
+        };
+      })
+    );
+
+    res.json({ success: true, data: memberStats });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/projects/stats/pm-projects — all PMs with their project counts (admin only)
+router.get('/stats/pm-projects', protect, restrictTo('admin'), async (req, res, next) => {
+  try {
+    const pms = await User.find({ role: 'project_manager' }).select('_id name email');
+
+    const pmStats = await Promise.all(
+      pms.map(async (pm) => {
+        const projectCount = await Project.countDocuments({ manager: pm._id });
+        const tasks = await Task.find({
+          projectId: { $in: (await Project.find({ manager: pm._id }).select('_id')).map((p) => p._id) },
+        });
+        const completedTasks = tasks.filter((t) => t.status === 'Completed').length;
+        return {
+          pmId: pm._id,
+          pmName: pm.name,
+          pmEmail: pm.email,
+          projectsManaged: projectCount,
+          totalTasks: tasks.length,
+          completedTasks,
+          completionPercentage: tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0,
+        };
+      })
+    );
+
+    res.json({ success: true, data: pmStats });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
