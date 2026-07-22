@@ -8,19 +8,36 @@ const activitySchema = new mongoose.Schema({
   },
   action: {
     type: String,
-    enum: [
-      'project_created',
-      'project_updated',
-      'project_deleted',
-      'task_created',
-      'task_updated',
-      'task_completed',
-      'member_added_to_project',
-      'member_removed_from_project',
-      'user_promoted',
-      'user_demoted',
-      'comment_added',
-    ],
+ enum: [
+  // User
+  "user_registered",
+  "user_updated",
+  "user_deleted",
+  "user_promoted",
+  "user_demoted",
+  "availability_updated",
+
+  // Project
+  "project_created",
+  "project_updated",
+  "project_deleted",
+  "project_manager_changed",
+
+  // Members
+  "member_added_to_project",
+  "member_removed_from_project",
+
+  // Tasks
+  "task_created",
+  "task_updated",
+  "task_completed",
+  "task_deleted",
+  "task_assigned",
+
+  // Comments
+  "comment_added",
+  "comment_deleted",
+],
     required: true,
   },
   description: {

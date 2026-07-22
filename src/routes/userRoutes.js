@@ -2,6 +2,7 @@ const express = require('express');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
+const logActivity = require("../utils/logActivity");
 
 const router = express.Router();
 
@@ -46,6 +47,13 @@ router.put('/:id/promote', protect, restrictTo('admin'), async (req, res, next) 
     }
     user.role = 'project_manager';
     await user.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "user_promoted",
+  description: `${req.user.name} promoted ${user.name} to Project Manager`,
+  entityType: "user",
+  entityId: user._id,
+});
     res.json({
       success: true,
       message: `${user.name} promoted to Project Manager`,
@@ -69,6 +77,13 @@ router.put('/:id/demote', protect, restrictTo('admin'), async (req, res, next) =
     }
     user.role = 'member';
     await user.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "user_demoted",
+  description: `${req.user.name} demoted ${user.name} to Member`,
+  entityType: "user",
+  entityId: user._id,
+});
     res.json({
       success: true,
       message: `${user.name} demoted to Member`,
@@ -101,6 +116,13 @@ router.put('/:id/availability', protect, async (req, res, next) => {
 
     user.availability = availability;
     await user.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "user_updated",
+  description: `${user.name} changed availability to ${availability}`,
+  entityType: "user",
+  entityId: user._id,
+});
 
     res.json({
       success: true,
@@ -129,6 +151,13 @@ router.put('/:id', protect, restrictTo('admin'), async (req, res, next) => {
 
     if (name) user.name = name;
     await user.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "user_updated",
+  description: `${req.user.name} updated ${user.name}'s profile`,
+  entityType: "user",
+  entityId: user._id,
+});
 
     res.json({
       success: true,
@@ -148,7 +177,15 @@ router.delete('/:id', protect, restrictTo('admin'), async (req, res, next) => {
     }
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+    const deletedUser = user;
     await user.deleteOne();
+    await logActivity({
+  userId: req.user._id,
+  action: "user_deleted",
+  description: `${req.user.name} deleted ${deletedUser.name}`,
+  entityType: "user",
+  entityId: deletedUser._id,
+});
     res.json({ success: true, message: `${user.name} has been deleted` });
   } catch (error) {
     next(error);
