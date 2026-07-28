@@ -33,13 +33,23 @@ router.post('/', protect, restrictTo('admin', 'project_manager'), async (req, re
 
     const task = await Task.create({ title, description, priority, deadline, projectId, assignedTo });
     await task.populate('assignedTo', 'name email');
-    await logActivity({
+await logActivity({
   userId: req.user._id,
   action: "task_created",
   description: `${req.user.name} created task "${task.title}"`,
   entityType: "task",
   entityId: task._id,
 });
+
+await logActivity({
+  userId: req.user._id,
+  action: "task_assigned",
+  description: `Task "${task.title}" assigned to ${task.assignedTo.name}`,
+  entityType: "task",
+  entityId: task._id,
+});
+
+
     res.status(201).json({ success: true, data: task });
   } catch (error) {
     next(error);
