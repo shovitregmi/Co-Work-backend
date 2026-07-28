@@ -1,6 +1,6 @@
 const express = require('express');
 const Task = require('../models/Task');
-const Project = require('../models/Project');
+const Project = require('../models/project');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
 const logActivity = require("../utils/logActivity");
