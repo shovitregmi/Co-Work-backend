@@ -1,4 +1,5 @@
 const express = require('express');
+const Project = require("../models/Project");
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
@@ -20,7 +21,27 @@ router.get('/', protect, restrictTo('admin', 'project_manager'), async (req, res
         .sort({ createdAt: -1 });
     }
 
-    res.json({ success: true, count: users.length, data: users });
+const usersWithProjectCount = await Promise.all(
+  users.map(async (user) => {
+    const projectCount = await Project.countDocuments({
+      $or: [
+        { manager: user._id },
+        { teamMembers: user._id },
+      ],
+    });
+
+    return {
+      ...user.toObject(),
+      projectCount,
+    };
+  })
+);
+
+res.json({
+  success: true,
+  count: usersWithProjectCount.length,
+  data: usersWithProjectCount,
+});
   } catch (error) {
     next(error);
   }
