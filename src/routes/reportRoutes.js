@@ -1,7 +1,7 @@
 const express = require('express');
-const Project = require('../models/Project');
+const Project = require('../models/project');
 const Task = require('../models/Task');
-const User = require('../models/User');
+const User = require('../models/user');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
 

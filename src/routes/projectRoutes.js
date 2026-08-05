@@ -1,8 +1,9 @@
 const express = require('express');
-const Project = require('../models/Project');
-const User = require('../models/User');
+const Project = require('../models/project');
+const User = require('../models/user');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
+const logActivity = require("../utils/logActivity");
 
 const router = express.Router();
 
@@ -28,6 +29,13 @@ router.post('/', protect, restrictTo('admin', 'project_manager'), async (req, re
 
     const project = await Project.create({ title, description, deadline, manager });
     await project.populate('manager', 'name email role');
+    await logActivity({
+  userId: req.user._id,
+  action: "project_created",
+  description: `${req.user.name} created project "${project.title}"`,
+  entityType: "project",
+  entityId: project._id,
+});
     res.status(201).json({ success: true, data: project });
   } catch (error) {
     next(error);
@@ -102,6 +110,13 @@ router.put('/:id', protect, restrictTo('admin', 'project_manager'), async (req, 
     if (status) project.status = status;
 
     await project.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "project_updated",
+  description: `${req.user.name} updated project "${project.title}"`,
+  entityType: "project",
+  entityId: project._id,
+});
     await project.populate('manager', 'name email');
     res.json({ success: true, data: project });
   } catch (error) {
@@ -115,6 +130,13 @@ router.delete('/:id', protect, restrictTo('admin'), async (req, res, next) => {
     const project = await Project.findById(req.params.id);
     if (!project) return res.status(404).json({ message: 'Project not found' });
     await project.deleteOne();
+    await logActivity({
+  userId: req.user._id,
+  action: "project_deleted",
+  description: `${req.user.name} deleted project "${project.title}"`,
+  entityType: "project",
+  entityId: project._id,
+});
     res.json({ success: true, message: 'Project deleted' });
   } catch (error) {
     next(error);
@@ -147,6 +169,13 @@ router.post('/:id/members', protect, restrictTo('admin', 'project_manager'), asy
     });
 
     await project.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "member_added_to_project",
+  description: `${req.user.name} added members to "${project.title}"`,
+  entityType: "project",
+  entityId: project._id,
+});
     await project.populate('teamMembers', 'name email role');
     res.json({ success: true, message: 'Members added', data: project });
   } catch (error) {
@@ -172,6 +201,13 @@ router.delete('/:id/members/:memberId', protect, restrictTo('admin', 'project_ma
     );
 
     await project.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "member_removed_from_project",
+  description: `${req.user.name} removed a member from "${project.title}"`,
+  entityType: "project",
+  entityId: project._id,
+});
     res.json({ success: true, message: 'Member removed', data: project });
   } catch (error) {
     next(error);
@@ -193,6 +229,13 @@ router.put('/:id/assign-manager', protect, restrictTo('admin'), async (req, res,
 
     project.manager = managerId;
     await project.save();
+    await logActivity({
+  userId: req.user._id,
+  action: "project_updated",
+  description: `${req.user.name} reassigned manager for "${project.title}"`,
+  entityType: "project",
+  entityId: project._id,
+});
     await project.populate('manager', 'name email role');
     res.json({ success: true, message: 'Project manager updated', data: project });
   } catch (error) {

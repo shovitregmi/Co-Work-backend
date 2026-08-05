@@ -14,6 +14,10 @@ const taskSchema = new mongoose.Schema({
     enum: ['To Do', 'In Progress', 'Review', 'Completed'], 
     default: 'To Do' 
   },
+  deadline: {
+      type: Date,
+      required: true,
+    },
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 

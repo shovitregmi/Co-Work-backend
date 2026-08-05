@@ -1,8 +1,9 @@
 const express = require('express');
 const Comment = require('../models/Comment');
 const Task = require('../models/Task');
-const Project = require('../models/Project');
+const Project = require('../models/project');
 const { protect } = require('../middleware/auth');
+const logActivity = require("../utils/logActivity");
 
 const router = express.Router();
 
@@ -36,6 +37,13 @@ router.post('/', protect, async (req, res, next) => {
     });
 
     await comment.populate('userId', 'name email');
+    await logActivity({
+  userId: req.user._id,
+  action: "comment_added",
+  description: `${req.user.name} commented on a task`,
+  entityType: "comment",
+  entityId: comment._id,
+});
     res.status(201).json({ success: true, data: comment });
   } catch (error) {
     next(error);
@@ -72,6 +80,13 @@ router.delete('/:id', protect, async (req, res, next) => {
     }
 
     await comment.deleteOne();
+    await logActivity({
+  userId: req.user._id,
+  action: "comment_deleted",
+  description: `${req.user.name} deleted a comment`,
+  entityType: "comment",
+  entityId: comment._id,
+});
     res.json({ success: true, message: 'Comment deleted' });
   } catch (error) {
     next(error);

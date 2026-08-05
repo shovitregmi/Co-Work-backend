@@ -1,8 +1,9 @@
 const express = require('express');
-const User = require('../models/User');
+const User = require('../models/user');
 const generateToken = require('../utils/token');
 const { protect } = require('../middleware/auth');
 const { validateRegister, validateLogin } = require('../middleware/validate');
+const logActivity = require("../utils/logActivity");
 
 const router = express.Router();
 
@@ -26,6 +27,13 @@ router.post('/register', validateRegister, async (req, res, next) => {
     }
 
     const user = await User.create({ name, email, password, role: 'member' });
+    await logActivity({
+  userId: user._id,
+  action: "user_registered", 
+  description: `${user.name} registered`,
+  entityType: "user",
+  entityId: user._id,
+});
 
     res.status(201).json({
       user: formatUser(user),
