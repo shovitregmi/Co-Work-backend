@@ -1,12 +1,9 @@
 const express = require('express');
 const Task = require('../models/Task');
-const Project = require('../models/project');
+const Project = require('../models/Project');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
-
 const mongoose = require('mongoose');
-
-
 
 const router = express.Router();
 
@@ -53,23 +50,6 @@ router.post('/', protect, restrictTo('admin', 'project_manager'), async (req, re
 
     const task = await Task.create({ title, description, priority, deadline, projectId, assignedTo });
     await task.populate('assignedTo', 'name email');
-await logActivity({
-  userId: req.user._id,
-  action: "task_created",
-  description: `${req.user.name} created task "${task.title}"`,
-  entityType: "task",
-  entityId: task._id,
-});
-
-await logActivity({
-  userId: req.user._id,
-  action: "task_assigned",
-  description: `Task "${task.title}" assigned to ${task.assignedTo.name}`,
-  entityType: "task",
-  entityId: task._id,
-});
-
-
     res.status(201).json({ success: true, data: task });
   } catch (error) {
     next(error);
@@ -167,19 +147,6 @@ router.put('/:id', protect, async (req, res, next) => {
       }
       if (req.body.status) task.status = req.body.status;
       await task.save();
-      await logActivity({
-  userId: req.user._id,
-  action:
-    task.status === "Completed"
-      ? "task_completed"
-      : "task_updated",
-  description:
-    task.status === "Completed"
-      ? `${req.user.name} completed task "${task.title}"`
-      : `${req.user.name} updated task "${task.title}"`,
-  entityType: "task",
-  entityId: task._id,
-});
       return res.json({ success: true, data: task });
     }
 
@@ -213,13 +180,6 @@ router.delete('/:id', protect, restrictTo('admin', 'project_manager'), async (re
     }
 
     await task.deleteOne();
-    await logActivity({
-  userId: req.user._id,
-  action: "task_deleted",
-  description: `${req.user.name} deleted task "${task.title}"`,
-  entityType: "task",
-  entityId: task._id,
-});
     res.json({ success: true, message: 'Task deleted' });
   } catch (error) {
     next(error);
