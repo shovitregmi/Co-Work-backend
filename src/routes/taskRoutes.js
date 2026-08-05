@@ -3,8 +3,25 @@ const Task = require('../models/Task');
 const Project = require('../models/Project');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
+const mongoose = require('mongoose');
 
 const router = express.Router();
+
+// Helper function to check if user has access to a project
+const checkProjectAccess = async (projectId, userId, userRole) => {
+  const project = await Project.findById(projectId);
+  if (!project) return { authorized: false, error: 'Project not found' };
+
+  const isMember = project.teamMembers.some((m) => m.toString() === userId.toString());
+  const isManager = project.manager.toString() === userId.toString();
+  const isAdmin = userRole === 'admin';
+
+  if (!isAdmin && !isManager && !isMember) {
+    return { authorized: false, error: 'Not authorized to access this project' };
+  }
+
+  return { authorized: true, project };
+};
 
 // POST /api/tasks — PM or admin creates + assigns task to a member
 // body: { title, description, priority, deadline, projectId, assignedTo }
@@ -18,6 +35,7 @@ router.post('/', protect, restrictTo('admin', 'project_manager'), async (req, re
     const project = await Project.findById(projectId);
     if (!project) return res.status(404).json({ message: 'Project not found' });
 
+    // PM can only create tasks in their own projects
     if (
       req.user.role === 'project_manager' &&
       project.manager.toString() !== req.user._id.toString()
@@ -38,17 +56,42 @@ router.post('/', protect, restrictTo('admin', 'project_manager'), async (req, re
   }
 });
 
-// GET /api/tasks — get tasks
-// ?projectId=xxx  → all tasks in a project
+// GET /api/tasks — get tasks with proper access control
+// ?projectId=xxx  → all tasks in that project (only if user has access)
 // ?assignedToMe=true → tasks assigned to logged-in user
-// members always see only their own tasks regardless of query
+// Members always see only their own tasks
+// PMs see only tasks in their managed projects
+// Admin sees all tasks
 router.get('/', protect, async (req, res, next) => {
   try {
     let query = {};
 
-    if (req.query.projectId) query.projectId = req.query.projectId;
-    if (req.user.role === 'member') query.assignedTo = req.user._id;
-    if (req.query.assignedToMe === 'true') query.assignedTo = req.user._id;
+    if (req.user.role === 'admin') {
+      // Admin sees all tasks, optionally filtered by project
+      if (req.query.projectId) query.projectId = req.query.projectId;
+    } else if (req.user.role === 'project_manager') {
+      // PM sees tasks only in their managed projects
+      if (req.query.projectId) {
+        // If specific project is requested, verify PM manages it
+        const project = await Project.findById(req.query.projectId);
+        if (!project || project.manager.toString() !== req.user._id.toString()) {
+          return res.status(403).json({ message: 'Not authorized to view tasks in this project' });
+        }
+        query.projectId = req.query.projectId;
+      } else {
+        // Show all tasks in all projects this PM manages
+        const pmProjects = await Project.find({ manager: req.user._id }).select('_id');
+        query.projectId = { $in: pmProjects.map((p) => p._id) };
+      }
+    } else {
+      // Member sees only tasks assigned to them
+      query.assignedTo = req.user._id;
+    }
+
+    // Additional filter if explicitly requested
+    if (req.query.assignedToMe === 'true' && req.user.role !== 'member') {
+      query.assignedTo = req.user._id;
+    }
 
     const tasks = await Task.find(query)
       .populate('assignedTo', 'name email')
@@ -61,20 +104,28 @@ router.get('/', protect, async (req, res, next) => {
   }
 });
 
-// GET /api/tasks/:id — single task
+// GET /api/tasks/:id — single task (with access control)
 router.get('/:id', protect, async (req, res, next) => {
   try {
     const task = await Task.findById(req.params.id)
       .populate('assignedTo', 'name email')
       .populate('projectId', 'title manager');
+
     if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    // Check access to the project this task belongs to
+    const accessCheck = await checkProjectAccess(task.projectId._id, req.user._id, req.user.role);
+    if (!accessCheck.authorized) {
+      return res.status(403).json({ message: accessCheck.error });
+    }
+
     res.json({ success: true, data: task });
   } catch (error) {
     next(error);
   }
 });
 
-// PUT /api/tasks/:id — update task
+// PUT /api/tasks/:id — update task (with strict access control)
 // member: can only update status of their own tasks
 // PM: can update everything in their own projects
 // admin: can update everything
@@ -83,7 +134,14 @@ router.put('/:id', protect, async (req, res, next) => {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
+    // Check project access first
+    const accessCheck = await checkProjectAccess(task.projectId, req.user._id, req.user.role);
+    if (!accessCheck.authorized) {
+      return res.status(403).json({ message: accessCheck.error });
+    }
+
     if (req.user.role === 'member') {
+      // Member can only update status of their own tasks
       if (task.assignedTo.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: 'Not authorized to update this task' });
       }
@@ -92,13 +150,7 @@ router.put('/:id', protect, async (req, res, next) => {
       return res.json({ success: true, data: task });
     }
 
-    if (req.user.role === 'project_manager') {
-      const project = await Project.findById(task.projectId);
-      if (project.manager.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ message: 'Not authorized to update this task' });
-      }
-    }
-
+    // PM or Admin — can update everything
     const { title, description, priority, status, deadline, assignedTo } = req.body;
     if (title) task.title = title;
     if (description) task.description = description;
@@ -115,17 +167,16 @@ router.put('/:id', protect, async (req, res, next) => {
   }
 });
 
-// DELETE /api/tasks/:id — PM or admin only
+// DELETE /api/tasks/:id — PM or admin only (with project ownership check)
 router.delete('/:id', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
-    if (req.user.role === 'project_manager') {
-      const project = await Project.findById(task.projectId);
-      if (project.manager.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ message: 'Not authorized to delete this task' });
-      }
+    // Check project access
+    const accessCheck = await checkProjectAccess(task.projectId, req.user._id, req.user.role);
+    if (!accessCheck.authorized) {
+      return res.status(403).json({ message: accessCheck.error });
     }
 
     await task.deleteOne();
@@ -145,16 +196,10 @@ router.get('/progress/by-status', protect, async (req, res, next) => {
       return res.status(400).json({ message: 'projectId query param required' });
     }
 
-    const project = await Project.findById(projectId);
-    if (!project) return res.status(404).json({ message: 'Project not found' });
-
-    // Check authorization
-    const isMember = project.teamMembers.some((m) => m.toString() === req.user._id.toString());
-    const isManager = project.manager.toString() === req.user._id.toString();
-    const isAdmin = req.user.role === 'admin';
-
-    if (!isAdmin && !isManager && !isMember) {
-      return res.status(403).json({ message: 'Not authorized to view this project' });
+    // Check project access
+    const accessCheck = await checkProjectAccess(projectId, req.user._id, req.user.role);
+    if (!accessCheck.authorized) {
+      return res.status(403).json({ message: accessCheck.error });
     }
 
     const statusCounts = await Task.aggregate([
