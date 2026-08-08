@@ -1,11 +1,28 @@
 const express = require('express');
-const Project = require('../models/project');
-const User = require('../models/user');
+const Project = require('../models/Project');
+const User = require('../models/User');
+const Task = require('../models/Task');
+const Activity = require('../models/Activity');
 const { protect } = require('../middleware/auth');
 const { restrictTo } = require('../middleware/role');
-const logActivity = require("../utils/logActivity");
+const mongoose = require('mongoose');
 
 const router = express.Router();
+
+// Helper to log activity
+const logActivity = async (userId, action, description, entityType, entityId) => {
+  try {
+    await Activity.create({
+      userId,
+      action,
+      description,
+      entityType,
+      entityId,
+    });
+  } catch (error) {
+    console.error('Failed to log activity:', error);
+  }
+};
 
 // POST /api/projects — create project
 // Admin must pass managerId in body to assign a PM
@@ -29,13 +46,16 @@ router.post('/', protect, restrictTo('admin', 'project_manager'), async (req, re
 
     const project = await Project.create({ title, description, deadline, manager });
     await project.populate('manager', 'name email role');
-    await logActivity({
-  userId: req.user._id,
-  action: "project_created",
-  description: `${req.user.name} created project "${project.title}"`,
-  entityType: "project",
-  entityId: project._id,
-});
+
+    // Log activity
+    await logActivity(
+      req.user._id,
+      'project_created',
+      `Created project "${project.title}"`,
+      'project',
+      project._id
+    );
+
     res.status(201).json({ success: true, data: project });
   } catch (error) {
     next(error);
@@ -110,14 +130,17 @@ router.put('/:id', protect, restrictTo('admin', 'project_manager'), async (req, 
     if (status) project.status = status;
 
     await project.save();
-    await logActivity({
-  userId: req.user._id,
-  action: "project_updated",
-  description: `${req.user.name} updated project "${project.title}"`,
-  entityType: "project",
-  entityId: project._id,
-});
     await project.populate('manager', 'name email');
+
+    // Log activity
+    await logActivity(
+      req.user._id,
+      'project_updated',
+      `Updated project "${project.title}"`,
+      'project',
+      project._id
+    );
+
     res.json({ success: true, data: project });
   } catch (error) {
     next(error);
@@ -129,14 +152,17 @@ router.delete('/:id', protect, restrictTo('admin'), async (req, res, next) => {
   try {
     const project = await Project.findById(req.params.id);
     if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    // Log activity before deletion
+    await logActivity(
+      req.user._id,
+      'project_deleted',
+      `Deleted project "${project.title}"`,
+      'project',
+      project._id
+    );
+
     await project.deleteOne();
-    await logActivity({
-  userId: req.user._id,
-  action: "project_deleted",
-  description: `${req.user.name} deleted project "${project.title}"`,
-  entityType: "project",
-  entityId: project._id,
-});
     res.json({ success: true, message: 'Project deleted' });
   } catch (error) {
     next(error);
@@ -162,21 +188,28 @@ router.post('/:id/members', protect, restrictTo('admin', 'project_manager'), asy
       return res.status(400).json({ message: 'memberIds must be an array of user IDs' });
     }
 
+    const addedMembers = [];
     memberIds.forEach((id) => {
       if (!project.teamMembers.includes(id)) {
         project.teamMembers.push(id);
+        addedMembers.push(id);
       }
     });
 
     await project.save();
-    await logActivity({
-  userId: req.user._id,
-  action: "member_added_to_project",
-  description: `${req.user.name} added members to "${project.title}"`,
-  entityType: "project",
-  entityId: project._id,
-});
     await project.populate('teamMembers', 'name email role');
+
+    // Log activity for each added member
+    const addedUsers = await User.find({ _id: { $in: addedMembers } });
+    const memberNames = addedUsers.map((u) => u.name).join(', ');
+    await logActivity(
+      req.user._id,
+      'member_added_to_project',
+      `Added ${memberNames} to project "${project.title}"`,
+      'project',
+      project._id
+    );
+
     res.json({ success: true, message: 'Members added', data: project });
   } catch (error) {
     next(error);
@@ -196,18 +229,23 @@ router.delete('/:id/members/:memberId', protect, restrictTo('admin', 'project_ma
       return res.status(403).json({ message: 'Not authorized to manage this project' });
     }
 
+    const removedMember = await User.findById(req.params.memberId);
+
     project.teamMembers = project.teamMembers.filter(
       (m) => m.toString() !== req.params.memberId
     );
 
     await project.save();
-    await logActivity({
-  userId: req.user._id,
-  action: "member_removed_from_project",
-  description: `${req.user.name} removed a member from "${project.title}"`,
-  entityType: "project",
-  entityId: project._id,
-});
+
+    // Log activity
+    await logActivity(
+      req.user._id,
+      'member_removed_from_project',
+      `Removed ${removedMember?.name || 'member'} from project "${project.title}"`,
+      'project',
+      project._id
+    );
+
     res.json({ success: true, message: 'Member removed', data: project });
   } catch (error) {
     next(error);
@@ -227,17 +265,25 @@ router.put('/:id/assign-manager', protect, restrictTo('admin'), async (req, res,
       return res.status(400).json({ message: 'Assigned user must have project_manager role' });
     }
 
+    const oldManager = await User.findById(project.manager);
     project.manager = managerId;
     await project.save();
-    await logActivity({
-  userId: req.user._id,
-  action: "project_updated",
-  description: `${req.user.name} reassigned manager for "${project.title}"`,
-  entityType: "project",
-  entityId: project._id,
-});
     await project.populate('manager', 'name email role');
-    res.json({ success: true, message: 'Project manager updated', data: project });
+
+    // Log activity
+    await logActivity(
+      req.user._id,
+      'project_updated',
+      `Reassigned project "${project.title}" from ${oldManager?.name} to ${pm.name}`,
+      'project',
+      project._id
+    );
+
+    res.json({
+      success: true,
+      message: 'Project manager updated. All tasks now under new manager.',
+      data: project,
+    });
   } catch (error) {
     next(error);
   }
@@ -276,8 +322,10 @@ router.get('/stats/pm-projects', protect, restrictTo('admin'), async (req, res, 
     const pmStats = await Promise.all(
       pms.map(async (pm) => {
         const projectCount = await Project.countDocuments({ manager: pm._id });
+        const pmProjects = await Project.find({ manager: pm._id }).select('_id');
+        const projectIds = pmProjects.map((p) => p._id);
         const tasks = await Task.find({
-          projectId: { $in: (await Project.find({ manager: pm._id }).select('_id')).map((p) => p._id) },
+          projectId: { $in: projectIds },
         });
         const completedTasks = tasks.filter((t) => t.status === 'Completed').length;
         return {
