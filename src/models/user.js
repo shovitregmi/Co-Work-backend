@@ -19,7 +19,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, "Password is required"],
       minlength: 6,
-      select: false, // never return password by default in queries
+      select: false,
     },
     role: {
       type: String,
@@ -31,21 +31,34 @@ const userSchema = new mongoose.Schema(
       enum: ["available", "not_available"],
       default: "available",
     },
+    emailVerificationCode: {
+      type: String,
+      select: false,
+    },
+    emailVerificationExpires: Date,
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    passwordResetToken: {
+      type: String,
+      select: false,
+    },
+    passwordResetExpires: Date,
+    lastVerificationCodeSentAt: Date,
   },
-  { timestamps: true }, // adds createdAt, updatedAt automatically
+  { timestamps: true },
 );
 
-// Hash password before saving, only if it was modified
-userSchema.pre("save", async function () {
+userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) {
-    return;
+    return next();
   }
-
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
+  next();
 });
 
-// Instance method to compare entered password with hashed one
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return bcrypt.compare(enteredPassword, this.password);
 };

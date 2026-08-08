@@ -1,6 +1,8 @@
 const express = require('express');
 const Notification = require('../models/Notification');
+const Activity = require('../models/Activity');
 const { protect } = require('../middleware/auth');
+const { restrictTo } = require('../middleware/role');
 
 const router = express.Router();
 
@@ -25,18 +27,44 @@ router.post('/', protect, async (req, res, next) => {
 });
 
 // GET /api/notifications — get current user's notifications
+// Admin sees activity feed of team, others see personal notifications
 router.get('/', protect, async (req, res, next) => {
   try {
     const unreadOnly = req.query.unreadOnly === 'true';
-    let query = { userId: req.user._id };
+    let notifications = [];
+    let unreadCount = 0;
 
-    if (unreadOnly) query.isRead = false;
+    if (req.user.role === 'admin') {
+      // Admin sees recent activities from the whole team
+      const activities = await Activity.find()
+        .populate('userId', 'name email role')
+        .sort({ createdAt: -1 })
+        .limit(50);
 
-    const notifications = await Notification.find(query)
-      .sort({ createdAt: -1 })
-      .populate('relatedEntityId');
+      // Transform activities into notification-like objects for display
+      notifications = activities.map((activity) => ({
+        _id: activity._id,
+        userId: activity.userId,
+        type: 'activity',
+        title: `${activity.userId?.name} - ${activity.action.replace(/_/g, ' ')}`,
+        message: activity.description,
+        isRead: false,
+        createdAt: activity.createdAt,
+      }));
 
-    const unreadCount = await Notification.countDocuments({ userId: req.user._id, isRead: false });
+      unreadCount = activities.length; // All activities shown as "unread"
+    } else {
+      // Regular users/PMs see personal notifications
+      let query = { userId: req.user._id };
+      if (unreadOnly) query.isRead = false;
+
+      const personalNotifications = await Notification.find(query)
+        .sort({ createdAt: -1 })
+        .populate('relatedEntityId');
+
+      notifications = personalNotifications;
+      unreadCount = await Notification.countDocuments({ userId: req.user._id, isRead: false });
+    }
 
     res.json({ success: true, count: notifications.length, unreadCount, data: notifications });
   } catch (error) {
@@ -44,9 +72,14 @@ router.get('/', protect, async (req, res, next) => {
   }
 });
 
-// GET /api/notifications/unread-count — quick endpoint for badge
+// GET /api/notifications/unread-count
 router.get('/unread-count', protect, async (req, res, next) => {
   try {
+    if (req.user.role === 'admin') {
+      const activityCount = await Activity.countDocuments();
+      return res.json({ success: true, unreadCount: activityCount });
+    }
+
     const unreadCount = await Notification.countDocuments({
       userId: req.user._id,
       isRead: false,
@@ -57,9 +90,13 @@ router.get('/unread-count', protect, async (req, res, next) => {
   }
 });
 
-// PUT /api/notifications/:id/read — mark single notification as read
+// PUT /api/notifications/:id/read — mark as read (personal notifications only)
 router.put('/:id/read', protect, async (req, res, next) => {
   try {
+    if (req.user.role === 'admin') {
+      return res.status(400).json({ message: 'Admin activities cannot be marked as read' });
+    }
+
     const notification = await Notification.findById(req.params.id);
     if (!notification) return res.status(404).json({ message: 'Notification not found' });
 
@@ -75,9 +112,13 @@ router.put('/:id/read', protect, async (req, res, next) => {
   }
 });
 
-// PUT /api/notifications/read-all — mark all as read
+// PUT /api/notifications/read-all — mark all personal as read
 router.put('/read-all', protect, async (req, res, next) => {
   try {
+    if (req.user.role === 'admin') {
+      return res.status(400).json({ message: 'Admin cannot mark activities as read' });
+    }
+
     await Notification.updateMany(
       { userId: req.user._id, isRead: false },
       { isRead: true }
@@ -88,9 +129,13 @@ router.put('/read-all', protect, async (req, res, next) => {
   }
 });
 
-// DELETE /api/notifications/:id — delete a notification
+// DELETE /api/notifications/:id
 router.delete('/:id', protect, async (req, res, next) => {
   try {
+    if (req.user.role === 'admin') {
+      return res.status(400).json({ message: 'Admin activities cannot be deleted' });
+    }
+
     const notification = await Notification.findById(req.params.id);
     if (!notification) return res.status(404).json({ message: 'Notification not found' });
 

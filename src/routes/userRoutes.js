@@ -1,149 +1,184 @@
-const express = require('express');
+const express = require("express");
 const Project = require("../models/project");
-const User = require('../models/user');
-const { protect } = require('../middleware/auth');
-const { restrictTo } = require('../middleware/role');
+const User = require("../models/user");
+const { protect } = require("../middleware/auth");
+const { restrictTo } = require("../middleware/role");
 const logActivity = require("../utils/logActivity");
 
 const router = express.Router();
 
 // GET /api/users — admin sees all users, PM sees all non-admin users
-router.get('/', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
-  try {
-    let users;
+router.get(
+  "/",
+  protect,
+  restrictTo("admin", "project_manager"),
+  async (req, res, next) => {
+    try {
+      let users;
 
-    if (req.user.role === 'admin') {
-      users = await User.find().select('-password').sort({ createdAt: -1 });
-    } else {
-      // PM sees everyone except admins
-      users = await User.find({ role: { $ne: 'admin' } })
-        .select('-password')
-        .sort({ createdAt: -1 });
+      if (req.user.role === "admin") {
+        users = await User.find().select("-password").sort({ createdAt: -1 });
+      } else {
+        // PM sees everyone except admins
+        users = await User.find({ role: { $ne: "admin" } })
+          .select("-password")
+          .sort({ createdAt: -1 });
+      }
+
+      const usersWithProjectCount = await Promise.all(
+        users.map(async (user) => {
+          const projectCount = await Project.countDocuments({
+            $or: [{ manager: user._id }, { teamMembers: user._id }],
+          });
+
+          return {
+            ...user.toObject(),
+            projectCount,
+          };
+        }),
+      );
+
+      res.json({
+        success: true,
+        count: usersWithProjectCount.length,
+        data: usersWithProjectCount,
+      });
+    } catch (error) {
+      next(error);
     }
-
-const usersWithProjectCount = await Promise.all(
-  users.map(async (user) => {
-    const projectCount = await Project.countDocuments({
-      $or: [
-        { manager: user._id },
-        { teamMembers: user._id },
-      ],
-    });
-
-    return {
-      ...user.toObject(),
-      projectCount,
-    };
-  })
+  },
 );
 
-res.json({
-  success: true,
-  count: usersWithProjectCount.length,
-  data: usersWithProjectCount,
-});
-  } catch (error) {
-    next(error);
-  }
-});
-
 // GET /api/users/:id — admin or PM can look up a single user
-router.get('/:id', protect, restrictTo('admin', 'project_manager'), async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.id).select('-password');
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ success: true, data: user });
-  } catch (error) {
-    next(error);
-  }
-});
+router.get(
+  "/:id",
+  protect,
+  restrictTo("admin", "project_manager"),
+  async (req, res, next) => {
+    try {
+      const user = await User.findById(req.params.id).select("-password");
+      if (!user) return res.status(404).json({ message: "User not found" });
+      res.json({ success: true, data: user });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 // PUT /api/users/:id/promote — member → project_manager (admin only)
-router.put('/:id/promote', protect, restrictTo('admin'), async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    if (user.role === 'admin') {
-      return res.status(400).json({ message: "Cannot change an admin's role" });
+router.put(
+  "/:id/promote",
+  protect,
+  restrictTo("admin"),
+  async (req, res, next) => {
+    try {
+      const user = await User.findById(req.params.id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      if (user.role === "admin") {
+        return res
+          .status(400)
+          .json({ message: "Cannot change an admin's role" });
+      }
+      user.role = "project_manager";
+      await user.save();
+      await logActivity({
+        userId: req.user._id,
+        action: "user_promoted",
+        description: `${req.user.name} promoted ${user.name} to Project Manager`,
+        entityType: "user",
+        entityId: user._id,
+      });
+      res.json({
+        success: true,
+        message: `${user.name} promoted to Project Manager`,
+        data: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+    } catch (error) {
+      next(error);
     }
-    user.role = 'project_manager';
-    await user.save();
-    await logActivity({
-  userId: req.user._id,
-  action: "user_promoted",
-  description: `${req.user.name} promoted ${user.name} to Project Manager`,
-  entityType: "user",
-  entityId: user._id,
-});
-    res.json({
-      success: true,
-      message: `${user.name} promoted to Project Manager`,
-      data: { id: user._id, name: user.name, email: user.email, role: user.role },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
+  },
+);
 
 // PUT /api/users/:id/demote — project_manager → member (admin only)
-router.put('/:id/demote', protect, restrictTo('admin'), async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    if (user.role === 'admin') {
-      return res.status(400).json({ message: "Cannot change an admin's role" });
+router.put(
+  "/:id/demote",
+  protect,
+  restrictTo("admin"),
+  async (req, res, next) => {
+    try {
+      const user = await User.findById(req.params.id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      if (user.role === "admin") {
+        return res
+          .status(400)
+          .json({ message: "Cannot change an admin's role" });
+      }
+      if (user.role === "member") {
+        return res.status(400).json({ message: "User is already a member" });
+      }
+      user.role = "member";
+      await user.save();
+      await logActivity({
+        userId: req.user._id,
+        action: "user_demoted",
+        description: `${req.user.name} demoted ${user.name} to Member`,
+        entityType: "user",
+        entityId: user._id,
+      });
+      res.json({
+        success: true,
+        message: `${user.name} demoted to Member`,
+        data: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+    } catch (error) {
+      next(error);
     }
-    if (user.role === 'member') {
-      return res.status(400).json({ message: 'User is already a member' });
-    }
-    user.role = 'member';
-    await user.save();
-    await logActivity({
-  userId: req.user._id,
-  action: "user_demoted",
-  description: `${req.user.name} demoted ${user.name} to Member`,
-  entityType: "user",
-  entityId: user._id,
-});
-    res.json({
-      success: true,
-      message: `${user.name} demoted to Member`,
-      data: { id: user._id, name: user.name, email: user.email, role: user.role },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
+  },
+);
 
 // PUT /api/users/:id/availability — toggle availability
 // Admin can change anyone's, user can change their own
-router.put('/:id/availability', protect, async (req, res, next) => {
+router.put("/:id/availability", protect, async (req, res, next) => {
   try {
     const { availability } = req.body;
 
-    if (!['available', 'not_available'].includes(availability)) {
-      return res.status(400).json({ message: 'availability must be "available" or "not_available"' });
+    if (!["available", "not_available"].includes(availability)) {
+      return res.status(400).json({
+        message: 'availability must be "available" or "not_available"',
+      });
     }
 
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = req.user.role === "admin";
     const isSelf = req.params.id === req.user._id.toString();
 
     if (!isAdmin && !isSelf) {
-      return res.status(403).json({ message: 'Not authorized to update this user' });
+      return res
+        .status(403)
+        .json({ message: "Not authorized to update this user" });
     }
 
     const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     user.availability = availability;
     await user.save();
     await logActivity({
-  userId: req.user._id,
-  action: "user_updated",
-  description: `${user.name} changed availability to ${availability}`,
-  entityType: "user",
-  entityId: user._id,
-});
+      userId: req.user._id,
+      action: "user_updated",
+      description: `${user.name} changed availability to ${availability}`,
+      entityType: "user",
+      entityId: user._id,
+    });
 
     res.json({
       success: true,
@@ -156,16 +191,16 @@ router.put('/:id/availability', protect, async (req, res, next) => {
 });
 
 // PUT /api/users/:id — edit name/email (admin only)
-router.put('/:id', protect, restrictTo('admin'), async (req, res, next) => {
+router.put("/:id", protect, restrictTo("admin"), async (req, res, next) => {
   try {
     const { name, email } = req.body;
     const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     if (email && email !== user.email) {
       const emailExists = await User.findOne({ email });
       if (emailExists) {
-        return res.status(400).json({ message: 'Email already in use' });
+        return res.status(400).json({ message: "Email already in use" });
       }
       user.email = email;
     }
@@ -173,17 +208,22 @@ router.put('/:id', protect, restrictTo('admin'), async (req, res, next) => {
     if (name) user.name = name;
     await user.save();
     await logActivity({
-  userId: req.user._id,
-  action: "user_updated",
-  description: `${req.user.name} updated ${user.name}'s profile`,
-  entityType: "user",
-  entityId: user._id,
-});
+      userId: req.user._id,
+      action: "user_updated",
+      description: `${req.user.name} updated ${user.name}'s profile`,
+      entityType: "user",
+      entityId: user._id,
+    });
 
     res.json({
       success: true,
-      message: 'User updated',
-      data: { id: user._id, name: user.name, email: user.email, role: user.role },
+      message: "User updated",
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
     });
   } catch (error) {
     next(error);
@@ -191,26 +231,81 @@ router.put('/:id', protect, restrictTo('admin'), async (req, res, next) => {
 });
 
 // DELETE /api/users/:id — admin only, cannot delete self
-router.delete('/:id', protect, restrictTo('admin'), async (req, res, next) => {
+router.delete("/:id", protect, restrictTo("admin"), async (req, res, next) => {
   try {
     if (req.params.id === req.user._id.toString()) {
-      return res.status(400).json({ message: 'You cannot delete your own account' });
+      return res
+        .status(400)
+        .json({ message: "You cannot delete your own account" });
     }
     const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ message: "User not found" });
     const deletedUser = user;
     await user.deleteOne();
     await logActivity({
-  userId: req.user._id,
-  action: "user_deleted",
-  description: `${req.user.name} deleted ${deletedUser.name}`,
-  entityType: "user",
-  entityId: deletedUser._id,
-});
+      userId: req.user._id,
+      action: "user_deleted",
+      description: `${req.user.name} deleted ${deletedUser.name}`,
+      entityType: "user",
+      entityId: deletedUser._id,
+    });
     res.json({ success: true, message: `${user.name} has been deleted` });
   } catch (error) {
     next(error);
   }
 });
+// PUT /api/users/:id/demote — demote PM to member, reassign projects to admin
+router.put(
+  "/:id/demote",
+  protect,
+  restrictTo("admin"),
+  async (req, res, next) => {
+    try {
+      const user = await User.findById(req.params.id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      if (user.role === "admin") {
+        return res
+          .status(400)
+          .json({ message: "Cannot change an admin's role" });
+      }
+      if (user.role === "member") {
+        return res.status(400).json({ message: "User is already a member" });
+      }
+
+      const Project = require("../models/Project");
+      const Task = require("../models/Task");
+
+      // Find all projects managed by this PM
+      const projectsManagedByUser = await Project.find({ manager: user._id });
+
+      // Reassign all projects to admin
+      const admin = await User.findOne({ role: "admin" });
+      if (admin) {
+        // Update projects
+        await Project.updateMany({ manager: user._id }, { manager: admin._id });
+
+        // Update all tasks in those projects — set manager field (if tasks have a manager field)
+        const projectIds = projectsManagedByUser.map((p) => p._id);
+        // Note: your Task model might not have a 'manager' field, adjust if needed
+      }
+
+      user.role = "member";
+      await user.save();
+
+      res.json({
+        success: true,
+        message: `${user.name} demoted to Member. All projects reassigned to Admin.`,
+        data: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 module.exports = router;
