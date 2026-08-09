@@ -24,13 +24,42 @@ router.get(
           .sort({ createdAt: -1 });
       }
 
-      res.json({ success: true, count: users.length, data: users });
+      // Add project count for each user
+      const usersWithProjectCount = await Promise.all(
+        users.map(async (user) => {
+          let projectCount = 0;
+
+          // PM: count projects they manage
+          if (user.role === "project_manager") {
+            projectCount = await Project.countDocuments({
+              manager: user._id,
+            });
+          }
+
+          // Member: count projects they are assigned to
+          else if (user.role === "member") {
+            projectCount = await Project.countDocuments({
+              teamMembers: user._id,
+            });
+          }
+
+          return {
+            ...user.toObject(),
+            projectCount,
+          };
+        }),
+      );
+
+      res.json({
+        success: true,
+        count: usersWithProjectCount.length,
+        data: usersWithProjectCount,
+      });
     } catch (error) {
       next(error);
     }
   },
 );
-
 // GET /api/users/:id — admin or PM can look up a single user
 router.get(
   "/:id",
