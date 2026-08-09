@@ -1,20 +1,20 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const notificationSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: "User",
     required: true,
   },
   type: {
     type: String,
     enum: [
-      'task_assigned',
-      'task_commented',
-      'project_member_added',
-      'project_created',
-      'task_status_updated',
-      'user_promoted',
+      "task_assigned",
+      "task_commented",
+      "project_member_added",
+      "project_created",
+      "task_status_updated",
+      "user_promoted",
     ],
     required: true,
   },
@@ -27,7 +27,7 @@ const notificationSchema = new mongoose.Schema({
   },
   relatedEntityType: {
     type: String,
-    enum: ['project', 'task', 'user'],
+    enum: ["project", "task", "user"],
   },
   relatedEntityId: mongoose.Schema.Types.ObjectId,
   isRead: {
@@ -40,4 +40,4 @@ const notificationSchema = new mongoose.Schema({
   },
 });
 
-module.exports = mongoose.model('Notification', notificationSchema);
+module.exports = mongoose.model("Notification", notificationSchema);

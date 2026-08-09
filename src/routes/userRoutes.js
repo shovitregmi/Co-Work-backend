@@ -1,9 +1,9 @@
 const express = require("express");
-const Project = require("../models/project");
-const User = require("../models/user");
+const User = require("../models/User");
+const Project = require("../models/Project");
 const { protect } = require("../middleware/auth");
 const { restrictTo } = require("../middleware/role");
-const logActivity = require("../utils/logActivity");
+const notify = require("../utils/notify");
 
 const router = express.Router();
 
@@ -19,30 +19,12 @@ router.get(
       if (req.user.role === "admin") {
         users = await User.find().select("-password").sort({ createdAt: -1 });
       } else {
-        // PM sees everyone except admins
         users = await User.find({ role: { $ne: "admin" } })
           .select("-password")
           .sort({ createdAt: -1 });
       }
 
-      const usersWithProjectCount = await Promise.all(
-        users.map(async (user) => {
-          const projectCount = await Project.countDocuments({
-            $or: [{ manager: user._id }, { teamMembers: user._id }],
-          });
-
-          return {
-            ...user.toObject(),
-            projectCount,
-          };
-        }),
-      );
-
-      res.json({
-        success: true,
-        count: usersWithProjectCount.length,
-        data: usersWithProjectCount,
-      });
+      res.json({ success: true, count: users.length, data: users });
     } catch (error) {
       next(error);
     }
@@ -79,15 +61,19 @@ router.put(
           .status(400)
           .json({ message: "Cannot change an admin's role" });
       }
+
       user.role = "project_manager";
       await user.save();
-      await logActivity({
-        userId: req.user._id,
-        action: "user_promoted",
-        description: `${req.user.name} promoted ${user.name} to Project Manager`,
-        entityType: "user",
-        entityId: user._id,
+
+      await notify({
+        userId: user._id,
+        type: "user_promoted",
+        title: "You were promoted to Project Manager",
+        message: "You can now create and manage projects",
+        relatedEntityType: "user",
+        relatedEntityId: user._id,
       });
+
       res.json({
         success: true,
         message: `${user.name} promoted to Project Manager`,
@@ -105,6 +91,7 @@ router.put(
 );
 
 // PUT /api/users/:id/demote — project_manager → member (admin only)
+// All projects managed by this PM get reassigned to admin as a placeholder
 router.put(
   "/:id/demote",
   protect,
@@ -121,24 +108,48 @@ router.put(
       if (user.role === "member") {
         return res.status(400).json({ message: "User is already a member" });
       }
+
+      // Find the admin who is demoting (they become the placeholder manager)
+      const admin = req.user;
+
+      // Reassign all projects managed by this PM to the admin
+      const projectsToReassign = await Project.find({ manager: user._id });
+      if (projectsToReassign.length > 0) {
+        await Project.updateMany({ manager: user._id }, { manager: admin._id });
+
+        // Notify admin they now temporarily manage these projects
+        await notify({
+          userId: admin._id,
+          type: "project_created",
+          title: `You are now managing ${projectsToReassign.length} project(s)`,
+          message: `${user.name} was demoted — their projects were reassigned to you until a new PM is set`,
+          relatedEntityType: "user",
+          relatedEntityId: user._id,
+        });
+      }
+
       user.role = "member";
       await user.save();
-      await logActivity({
-        userId: req.user._id,
-        action: "user_demoted",
-        description: `${req.user.name} demoted ${user.name} to Member`,
-        entityType: "user",
-        entityId: user._id,
+
+      await notify({
+        userId: user._id,
+        type: "user_promoted",
+        title: "Your role was changed to Member",
+        message: "Your managed projects have been reassigned to Admin",
+        relatedEntityType: "user",
+        relatedEntityId: user._id,
       });
+
       res.json({
         success: true,
-        message: `${user.name} demoted to Member`,
+        message: `${user.name} demoted to Member. ${projectsToReassign.length} project(s) reassigned to Admin.`,
         data: {
           id: user._id,
           name: user.name,
           email: user.email,
           role: user.role,
         },
+        reassignedProjects: projectsToReassign.length,
       });
     } catch (error) {
       next(error);
@@ -172,13 +183,6 @@ router.put("/:id/availability", protect, async (req, res, next) => {
 
     user.availability = availability;
     await user.save();
-    await logActivity({
-      userId: req.user._id,
-      action: "user_updated",
-      description: `${user.name} changed availability to ${availability}`,
-      entityType: "user",
-      entityId: user._id,
-    });
 
     res.json({
       success: true,
@@ -207,13 +211,6 @@ router.put("/:id", protect, restrictTo("admin"), async (req, res, next) => {
 
     if (name) user.name = name;
     await user.save();
-    await logActivity({
-      userId: req.user._id,
-      action: "user_updated",
-      description: `${req.user.name} updated ${user.name}'s profile`,
-      entityType: "user",
-      entityId: user._id,
-    });
 
     res.json({
       success: true,
@@ -240,72 +237,11 @@ router.delete("/:id", protect, restrictTo("admin"), async (req, res, next) => {
     }
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    const deletedUser = user;
     await user.deleteOne();
-    await logActivity({
-      userId: req.user._id,
-      action: "user_deleted",
-      description: `${req.user.name} deleted ${deletedUser.name}`,
-      entityType: "user",
-      entityId: deletedUser._id,
-    });
     res.json({ success: true, message: `${user.name} has been deleted` });
   } catch (error) {
     next(error);
   }
 });
-// PUT /api/users/:id/demote — demote PM to member, reassign projects to admin
-router.put(
-  "/:id/demote",
-  protect,
-  restrictTo("admin"),
-  async (req, res, next) => {
-    try {
-      const user = await User.findById(req.params.id);
-      if (!user) return res.status(404).json({ message: "User not found" });
-      if (user.role === "admin") {
-        return res
-          .status(400)
-          .json({ message: "Cannot change an admin's role" });
-      }
-      if (user.role === "member") {
-        return res.status(400).json({ message: "User is already a member" });
-      }
-
-      const Project = require("../models/Project");
-      const Task = require("../models/Task");
-
-      // Find all projects managed by this PM
-      const projectsManagedByUser = await Project.find({ manager: user._id });
-
-      // Reassign all projects to admin
-      const admin = await User.findOne({ role: "admin" });
-      if (admin) {
-        // Update projects
-        await Project.updateMany({ manager: user._id }, { manager: admin._id });
-
-        // Update all tasks in those projects — set manager field (if tasks have a manager field)
-        const projectIds = projectsManagedByUser.map((p) => p._id);
-        // Note: your Task model might not have a 'manager' field, adjust if needed
-      }
-
-      user.role = "member";
-      await user.save();
-
-      res.json({
-        success: true,
-        message: `${user.name} demoted to Member. All projects reassigned to Admin.`,
-        data: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
 
 module.exports = router;
