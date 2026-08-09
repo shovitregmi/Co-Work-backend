@@ -1,6 +1,6 @@
 const express = require("express");
-const Project = require("../models/Project");
-const User = require("../models/User");
+const Project = require("../models/project");
+const User = require("../models/user");
 const Task = require("../models/Task");
 const Activity = require("../models/Activity");
 const { protect } = require("../middleware/auth");

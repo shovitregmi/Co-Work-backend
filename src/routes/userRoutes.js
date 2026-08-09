@@ -1,6 +1,6 @@
 const express = require("express");
-const User = require("../models/User");
-const Project = require("../models/Project");
+const User = require("../models/user");
+const Project = require("../models/project");
 const { protect } = require("../middleware/auth");
 const { restrictTo } = require("../middleware/role");
 const notify = require("../utils/notify");

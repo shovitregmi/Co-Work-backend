@@ -1,6 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
-const User = require("../models/User");
+const User = require("../models/user");
 const generateToken = require("../utils/token");
 const { protect } = require("../middleware/auth");
 const { validateRegister, validateLogin } = require("../middleware/validate");
