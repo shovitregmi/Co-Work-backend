@@ -76,7 +76,16 @@ router.post(
         projectId,
         assignedTo,
       });
-      await task.populate("assignedTo", "name email");
+      await task.populate([
+        {
+          path: "assignedTo",
+          select: "name email",
+        },
+        {
+          path: "projectId",
+          select: "title",
+        },
+      ]);
 
       // Notify the assigned member
       await notify({
