@@ -1,15 +1,8 @@
-const nodemailer = require("nodemailer");
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-});
+const { Resend } = require("resend");
 
-const FROM_ADDRESS = `"Co-Work" <${process.env.EMAIL_USER}>`;
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const FROM_ADDRESS = "Co-Work <onboarding@resend.dev>";
 
 const generateCode = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -68,12 +61,17 @@ const sendVerificationEmail = async (email, code) => {
   `;
 
   try {
-    await transporter.sendMail({
+    const { error } = await resend.emails.send({
       from: FROM_ADDRESS,
       to: email,
       subject: "Your Co-Work verification code",
       html: emailWrapper("Verify your email", bodyContent),
     });
+
+    if (error) {
+      console.error("Email send error:", error);
+      return false;
+    }
     return true;
   } catch (error) {
     console.error("Email send error:", error);
@@ -110,12 +108,17 @@ const sendPasswordResetEmail = async (email, token, userName) => {
   `;
 
   try {
-    await transporter.sendMail({
+    const { error } = await resend.emails.send({
       from: FROM_ADDRESS,
       to: email,
       subject: "Reset your Co-Work password",
       html: emailWrapper("Reset your password", bodyContent),
     });
+
+    if (error) {
+      console.error("Email send error:", error);
+      return false;
+    }
     return true;
   } catch (error) {
     console.error("Email send error:", error);
