@@ -2,7 +2,7 @@ const { Resend } = require("resend");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const FROM_ADDRESS = "Co-Work <onboarding@resend.dev>";
+const FROM_ADDRESS = "Co-Work <noreply@cowork.shovitregmi.com.np>";
 
 const generateCode = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
