@@ -1,3 +1,7 @@
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
+
+// ...rest of your existing requires (express, mongoose, etc.)
 require("dotenv").config();
 
 const app = require("./app");
